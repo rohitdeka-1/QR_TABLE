@@ -1,0 +1,634 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { io } from 'socket.io-client';
+import jsQR from 'jsqr';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
+
+function readQuery() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    tableId: params.get('tableId') || '',
+    token: params.get('token') || '',
+  };
+}
+
+function formatCurrency(value = 0) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(Number(value) || 0);
+}
+
+function parseTableLink(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { tableId: '', token: '' };
+
+  try {
+    const url = new URL(raw, window.location.origin);
+    const params = new URLSearchParams(url.search);
+    return {
+      tableId: params.get('tableId') || '',
+      token: params.get('token') || '',
+    };
+  } catch {
+    const params = new URLSearchParams(raw.startsWith('?') ? raw : `?${raw}`);
+    return {
+      tableId: params.get('tableId') || '',
+      token: params.get('token') || '',
+    };
+  }
+}
+
+function mergeOrderList(existingOrders, incomingOrder) {
+  const orderId = incomingOrder?._id;
+  if (!orderId) return existingOrders;
+  const filtered = existingOrders.filter((order) => String(order._id) !== String(orderId));
+  return [incomingOrder, ...filtered];
+}
+
+function QRLanding({ onLoadSession }) {
+  const [scanValue, setScanValue] = useState('');
+  const [error, setError] = useState('');
+  const [scannerActive, setScannerActive] = useState(false);
+
+  useEffect(() => {
+    if (!scannerActive) return undefined;
+
+    const scanner = new Html5QrcodeScanner(
+      'qr-reader',
+      {
+        fps: 10,
+        qrbox: { width: 250, height: 250 },
+        rememberLastUsedCamera: true,
+      },
+      false,
+    );
+
+    // scanner.render(
+      (decodedText) => {
+        const session = parseTableLink(decodedText);
+        if (session.tableId && session.token) {
+          onLoadSession(session);
+        } else {
+          setError('Scanned QR did not contain a valid tableId and token.');
+        }
+      },
+      () => {},
+    );
+    // scanner.render();
+
+    return () => {
+      scanner.clear().catch(() => {});
+    };
+  }, [onLoadSession, scannerActive]);
+
+  function handleLoadSession(event) {
+    event.preventDefault();
+    const session = parseTableLink(scanValue);
+    if (!session.tableId || !session.token) {
+      setError('Paste the scanned QR link or the tableId/token query string.');
+      return;
+    }
+    onLoadSession(session);
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center px-4 py-10">
+      <div className="grid w-full max-w-4xl gap-6 lg:grid-cols-[0.95fr_1.05fr]">
+        <section className="rounded-[2rem] border border-white/10 bg-slate-950/90 p-8 shadow-2xl shadow-black/30">
+          <p className="text-xs uppercase tracking-[0.4em] text-amber-300">QR Restaurant</p>
+          <h1 className="mt-4 text-4xl font-semibold text-white">Scan the table QR to start ordering</h1>
+          <p className="mt-4 text-sm leading-6 text-slate-300">
+            The menu stays hidden until the QR is scanned. Once the scanned link provides a valid
+            <span className="font-semibold text-white"> tableId</span> and
+            <span className="font-semibold text-white"> token</span>, the menu opens automatically.
+          </p>
+
+          <div className="mt-8 flex flex-col gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setError('');
+                setScannerActive(true);
+              }}
+              className="rounded-2xl bg-emerald-400 px-4 py-3 font-semibold text-slate-950 transition hover:bg-emerald-300"
+            >
+              Start camera scan
+            </button>
+            <p className="text-xs text-slate-400">
+              Camera access is only requested after you click the button. If the prompt does not appear, check browser site permissions and make sure the page is open on localhost or HTTPS.
+            </p>
+          </div>
+
+          <div className="mt-6 rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
+            {scannerActive && <video id="qr-video" autoPlay playsInline className="w-full rounded-2xl" />}
+            {!scannerActive && <p className="text-sm text-slate-400">Camera scanner is off. Click the button above to request permission.</p>}
+          </div>
+
+          <p className="mt-6 text-sm text-slate-400">
+            Open the camera on your phone, scan the QR on the table, and this page will move to the menu.
+          </p>
+        </section>
+
+        <section className="rounded-[2rem] border border-white/10 bg-slate-900/80 p-8 shadow-2xl shadow-black/30 backdrop-blur">
+          <h2 className="text-xl font-semibold text-white">Test scan / manual paste</h2>
+          <p className="mt-2 text-sm text-slate-400">
+            For development, paste the scanned QR URL here to jump directly into the menu.
+          </p>
+
+          <form onSubmit={handleLoadSession} className="mt-6 space-y-4">
+            <label className="grid gap-2 text-sm text-slate-300">
+              Scanned QR link
+              <textarea
+                rows={5}
+                value={scanValue}
+                onChange={(event) => setScanValue(event.target.value)}
+                placeholder="http://localhost:5174/?tableId=...&token=..."
+                className="rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-amber-400/50"
+              />
+            </label>
+
+            {error ? <p className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</p> : null}
+
+            <button
+              type="submit"
+              className="w-full rounded-2xl bg-amber-400 px-4 py-3 font-semibold text-slate-950 transition hover:bg-amber-300"
+            >
+              Open menu
+            </button>
+          </form>
+
+          <div className="mt-8 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-slate-300">
+            <p className="font-medium text-white">Flow</p>
+            <ol className="mt-3 space-y-2">
+              <li>1. Scan the QR on the table.</li>
+              <li>2. The scanned link includes the table id and secure token.</li>
+              <li>3. The menu loads for that table only.</li>
+              <li>4. Order is sent to the kitchen in real time.</li>
+            </ol>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function CustomerMenu({ session, onResetSession }) {
+  const [menu, setMenu] = useState([]);
+  const [cart, setCart] = useState([]);
+  const [loadingMenu, setLoadingMenu] = useState(true);
+  const [loadingOrder, setLoadingOrder] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [orderResult, setOrderResult] = useState(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadMenu() {
+      setLoadingMenu(true);
+      setError('');
+      try {
+        const response = await fetch(`${API_BASE_URL}/menu`, { signal: controller.signal });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data?.message || 'Failed to load menu');
+        setMenu(Array.isArray(data) ? data : []);
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          setError(err.message || 'Failed to load menu');
+        }
+      } finally {
+        setLoadingMenu(false);
+      }
+    }
+
+    loadMenu();
+    return () => controller.abort();
+  }, []);
+
+  const cartSummary = useMemo(() => {
+    const itemCount = cart.reduce((count, item) => count + item.qty, 0);
+    const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+    return { itemCount, total };
+  }, [cart]);
+
+  function addToCart(menuItem) {
+    setMessage('');
+    setOrderResult(null);
+    setCart((currentCart) => {
+      const existing = currentCart.find((item) => item._id === menuItem._id);
+      if (existing) {
+        return currentCart.map((item) =>
+          item._id === menuItem._id ? { ...item, qty: item.qty + 1 } : item,
+        );
+      }
+      return [...currentCart, { ...menuItem, qty: 1 }];
+    });
+  }
+
+  function updateQty(itemId, qty) {
+    setCart((currentCart) => currentCart.map((item) => (item._id === itemId ? { ...item, qty } : item)).filter((item) => item.qty > 0));
+  }
+
+  async function placeOrder(event) {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+
+    if (!session.tableId || !session.token) {
+      setError('The QR session is missing. Scan the table QR again.');
+      return;
+    }
+
+    if (!cart.length) {
+      setError('Add at least one menu item before placing an order.');
+      return;
+    }
+
+    setLoadingOrder(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tableId: session.tableId,
+          token: session.token,
+          items: cart.map((item) => ({
+            itemId: item._id,
+            name: item.name,
+            price: item.price,
+            qty: item.qty,
+          })),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message || 'Order submission failed');
+
+      setOrderResult(data);
+      setCart([]);
+      setMessage(`Order sent to kitchen. Queue #${data.queueNumber}.`);
+    } catch (err) {
+      setError(err.message || 'Order submission failed');
+    } finally {
+      setLoadingOrder(false);
+    }
+  }
+
+  const tableLabel = session.tableId ? `Table ${session.tableId.slice(0, 8)}...` : 'Unknown table';
+
+  return (
+    <div className="mx-auto min-h-screen max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <header className="mb-8 rounded-[2rem] border border-white/10 bg-slate-950/90 p-6 shadow-2xl shadow-black/30 backdrop-blur">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.4em] text-amber-300">QR Restaurant</p>
+            <h1 className="mt-2 text-3xl font-semibold text-white">Menu for {tableLabel}</h1>
+            <p className="mt-2 text-sm text-slate-300">This menu only appears after a valid QR scan. Orders go directly to the kitchen.</p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-sm text-emerald-300">Secure session active</span>
+            <button type="button" onClick={onResetSession} className="rounded-full border border-white/10 px-3 py-1 text-sm text-slate-200 transition hover:bg-white/5">
+              Scan again
+            </button>
+            <a href="/kitchen" className="rounded-full border border-amber-400/30 px-3 py-1 text-sm text-amber-200 transition hover:bg-amber-400/10">
+              Kitchen
+            </a>
+          </div>
+        </div>
+      </header>
+
+      <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+        <section className="rounded-[2rem] border border-white/10 bg-slate-900/80 p-6">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-semibold text-white">Menu</h2>
+              <p className="mt-1 text-sm text-slate-400">Pick items and submit the order securely.</p>
+            </div>
+            <button type="button" onClick={() => setCart([])} className="rounded-full border border-white/10 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5">
+              Clear cart
+            </button>
+          </div>
+
+          {loadingMenu ? (
+            <div className="mt-6 rounded-2xl border border-dashed border-white/10 p-6 text-sm text-slate-400">Loading menu...</div>
+          ) : (
+            <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {menu.map((item) => (
+                <article key={item._id} className="rounded-2xl border border-white/10 bg-slate-950 p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h3 className="text-base font-semibold text-white">{item.name}</h3>
+                      <p className="mt-1 text-sm text-slate-400">{item.description || 'Freshly prepared item'}</p>
+                    </div>
+                    <span className="rounded-full bg-amber-500/15 px-3 py-1 text-sm font-medium text-amber-200">{formatCurrency(item.price)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => addToCart(item)}
+                    className="mt-4 w-full rounded-2xl bg-amber-400 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-amber-300"
+                  >
+                    Add to order
+                  </button>
+                </article>
+              ))}
+              {!menu.length ? <div className="rounded-2xl border border-dashed border-white/10 p-6 text-sm text-slate-400">No menu items available.</div> : null}
+            </div>
+          )}
+        </section>
+
+        <aside className="rounded-[2rem] border border-white/10 bg-slate-900/80 p-6">
+          <h2 className="text-xl font-semibold text-white">Your order</h2>
+          <p className="mt-1 text-sm text-slate-400">Review items before sending to the kitchen.</p>
+
+          <div className="mt-5 space-y-3">
+            {cart.length ? cart.map((item) => (
+              <div key={item._id} className="rounded-2xl border border-white/10 bg-slate-950 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="font-medium text-white">{item.name}</h3>
+                    <p className="text-sm text-slate-400">{formatCurrency(item.price)} each</p>
+                  </div>
+                  <div className="text-right text-sm text-slate-300">{formatCurrency(item.price * item.qty)}</div>
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <button type="button" onClick={() => updateQty(item._id, item.qty - 1)} className="h-9 w-9 rounded-full border border-white/10 text-white transition hover:bg-white/5">-</button>
+                  <span className="min-w-10 text-center text-sm text-white">{item.qty}</span>
+                  <button type="button" onClick={() => updateQty(item._id, item.qty + 1)} className="h-9 w-9 rounded-full border border-white/10 text-white transition hover:bg-white/5">+</button>
+                </div>
+              </div>
+            )) : (
+              <div className="rounded-2xl border border-dashed border-white/10 p-6 text-sm text-slate-400">Cart is empty. Add menu items.</div>
+            )}
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="flex items-center justify-between text-sm text-slate-300"><span>Items</span><span>{cartSummary.itemCount}</span></div>
+            <div className="mt-2 flex items-center justify-between text-lg font-semibold text-white"><span>Total</span><span>{formatCurrency(cartSummary.total)}</span></div>
+          </div>
+
+          {error ? <p className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</p> : null}
+          {message ? <p className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{message}</p> : null}
+          {orderResult ? <p className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">Queue #{orderResult.queueNumber} created.</p> : null}
+
+          <form onSubmit={placeOrder} className="mt-5">
+            <button
+              type="submit"
+              disabled={loadingOrder || !cart.length}
+              className="w-full rounded-2xl bg-emerald-400 px-4 py-3 font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loadingOrder ? 'Sending to kitchen...' : 'Place order'}
+            </button>
+          </form>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function KitchenPanel() {
+  const [credentials, setCredentials] = useState({ email: '', password: '' });
+  const [auth, setAuth] = useState(() => {
+    const stored = sessionStorage.getItem('qr-restaurant-auth');
+    return stored ? JSON.parse(stored) : null;
+  });
+  const [orders, setOrders] = useState([]);
+  const [loginError, setLoginError] = useState('');
+  const [connected, setConnected] = useState(false);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  const socketRef = useRef(null);
+
+  async function apiFetch(endpoint, options = {}) {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+        ...(options.headers || {}),
+      },
+    });
+
+    const isJson = response.headers.get('content-type')?.includes('application/json');
+    const data = isJson ? await response.json() : null;
+    if (!response.ok) throw new Error(data?.message || 'Request failed');
+    return data;
+  }
+
+  useEffect(() => {
+    if (!auth?.token) return undefined;
+
+    const socket = io(SOCKET_URL, { transports: ['websocket'] });
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      setConnected(true);
+      socket.emit('join', 'kitchen');
+    });
+
+    socket.on('disconnect', () => setConnected(false));
+    socket.on('newOrder', (order) => setOrders((current) => mergeOrderList(current, order)));
+    socket.on('orderUpdated', (order) => setOrders((current) => mergeOrderList(current, order)));
+
+    return () => {
+      socket.emit('leave', 'kitchen');
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, [auth?.token]);
+
+  useEffect(() => {
+    async function fetchOrders() {
+      if (!auth?.token) return;
+      setLoadingOrders(true);
+      try {
+        const data = await apiFetch('/orders');
+        setOrders(Array.isArray(data) ? data : []);
+      } catch (err) {
+        setLoginError(err.message || 'Failed to fetch orders');
+      } finally {
+        setLoadingOrders(false);
+      }
+    }
+
+    fetchOrders();
+  }, [auth?.token]);
+
+  async function login(event) {
+    event.preventDefault();
+    setLoginError('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(credentials),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message || 'Login failed');
+      sessionStorage.setItem('qr-restaurant-auth', JSON.stringify(data));
+      setAuth(data);
+    } catch (err) {
+      setLoginError(err.message || 'Login failed');
+    }
+  }
+
+  function logout() {
+    sessionStorage.removeItem('qr-restaurant-auth');
+    setAuth(null);
+    setOrders([]);
+    setConnected(false);
+    if (socketRef.current) socketRef.current.disconnect();
+  }
+
+  async function updateStatus(orderId, status) {
+    try {
+      const updated = await apiFetch(`/orders/${orderId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+      setOrders((current) => mergeOrderList(current, updated));
+    } catch (err) {
+      setLoginError(err.message || 'Unable to update order');
+    }
+  }
+
+  async function markPaid(orderId) {
+    try {
+      const updated = await apiFetch(`/orders/${orderId}/mark-paid`, { method: 'POST' });
+      setOrders((current) => mergeOrderList(current, updated));
+    } catch (err) {
+      setLoginError(err.message || 'Unable to mark paid');
+    }
+  }
+
+  return (
+    <div className="mx-auto min-h-screen max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <header className="mb-8 rounded-[2rem] border border-white/10 bg-slate-950/90 p-6 shadow-2xl shadow-black/30 backdrop-blur">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.4em] text-amber-300">Kitchen dashboard</p>
+            <h1 className="mt-2 text-3xl font-semibold text-white">Live order queue</h1>
+            <p className="mt-2 text-sm text-slate-300">Orders from scanned table QR codes appear here in real time.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <span className={`rounded-full px-3 py-1 ${connected ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-200'}`}>
+              {connected ? 'Socket connected' : 'Socket disconnected'}
+            </span>
+            <a href="/" className="rounded-full border border-white/10 px-3 py-1 text-slate-200 transition hover:bg-white/5">Customer view</a>
+            {auth?.token ? <button type="button" onClick={logout} className="rounded-full border border-red-400/20 px-3 py-1 text-red-200 transition hover:bg-red-500/10">Logout</button> : null}
+          </div>
+        </div>
+      </header>
+
+      {!auth?.token ? (
+        <section className="mx-auto max-w-xl rounded-[2rem] border border-white/10 bg-slate-900/80 p-6">
+          <h2 className="text-xl font-semibold text-white">Kitchen login</h2>
+          <p className="mt-1 text-sm text-slate-400">Use an admin, staff, or cashier account.</p>
+          <form onSubmit={login} className="mt-5 space-y-4">
+            <label className="grid gap-2 text-sm text-slate-300">
+              Email
+              <input value={credentials.email} onChange={(event) => setCredentials((current) => ({ ...current, email: event.target.value }))} className="rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-amber-400/50" placeholder="admin@test.com" />
+            </label>
+            <label className="grid gap-2 text-sm text-slate-300">
+              Password
+              <input type="password" value={credentials.password} onChange={(event) => setCredentials((current) => ({ ...current, password: event.target.value }))} className="rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-amber-400/50" placeholder="AdminPass123" />
+            </label>
+            {loginError ? <p className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">{loginError}</p> : null}
+            <button type="submit" className="w-full rounded-2xl bg-amber-400 px-4 py-3 font-semibold text-slate-950 transition hover:bg-amber-300">Log in</button>
+          </form>
+        </section>
+      ) : (
+        <section className="space-y-4">
+          <div className="flex items-center justify-between gap-4 rounded-[2rem] border border-white/10 bg-slate-900/80 p-4">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Orders</h2>
+              <p className="text-sm text-slate-400">Newest orders first. Socket events refresh this list live.</p>
+            </div>
+            <button type="button" onClick={() => window.location.reload()} className="rounded-full border border-white/10 px-4 py-2 text-sm text-slate-200 transition hover:bg-white/5">
+              {loadingOrders ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+
+          {loginError ? <p className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">{loginError}</p> : null}
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            {orders.map((order) => {
+              const tableNumber = order?.tableId?.tableNumber || order?.tableId || 'Unknown';
+              return (
+                <article key={order._id} className="rounded-[2rem] border border-white/10 bg-slate-900/80 p-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h3 className="text-xl font-semibold text-white">Queue #{order.queueNumber}</h3>
+                      <p className="mt-1 text-sm text-slate-400">Table {tableNumber}</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-2 text-sm">
+                      <span className="rounded-full bg-white/5 px-3 py-1 text-slate-200">{order.status}</span>
+                      <span className={`rounded-full px-3 py-1 ${order.paymentStatus === 'paid' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-200'}`}>{order.paymentStatus}</span>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-2 text-sm text-slate-300">
+                    {order.items?.map((item, index) => (
+                      <div key={`${order._id}-${index}`} className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-950 px-4 py-3">
+                        <span>{item.name}</span>
+                        <span>x{item.qty} {formatCurrency(item.price)}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => updateStatus(order._id, 'preparing')} className="rounded-full border border-sky-400/20 px-4 py-2 text-sm text-sky-200 transition hover:bg-sky-500/10">Preparing</button>
+                    <button type="button" onClick={() => updateStatus(order._id, 'ready')} className="rounded-full border border-emerald-400/20 px-4 py-2 text-sm text-emerald-200 transition hover:bg-emerald-500/10">Ready</button>
+                    <button type="button" onClick={() => updateStatus(order._id, 'served')} className="rounded-full border border-violet-400/20 px-4 py-2 text-sm text-violet-200 transition hover:bg-violet-500/10">Served</button>
+                    <button type="button" onClick={() => markPaid(order._id)} className="rounded-full border border-amber-400/20 px-4 py-2 text-sm text-amber-200 transition hover:bg-amber-500/10">Mark paid</button>
+                  </div>
+                </article>
+              );
+            })}
+
+            {!orders.length ? (
+              <div className="rounded-[2rem] border border-dashed border-white/10 p-8 text-sm text-slate-400">
+                No orders yet. When guests place an order, it will appear here in real time.
+              </div>
+            ) : null}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  const [session, setSession] = useState(readQuery());
+
+  useEffect(() => {
+    const onPopState = () => setSession(readQuery());
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  function loadSession(nextSession) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('tableId', nextSession.tableId);
+    url.searchParams.set('token', nextSession.token);
+    window.history.pushState({}, '', url);
+    setSession(nextSession);
+  }
+
+  function resetSession() {
+    const url = new URL(window.location.href);
+    url.search = '';
+    window.history.pushState({}, '', url);
+    setSession({ tableId: '', token: '' });
+  }
+
+  if (window.location.pathname.startsWith('/kitchen')) {
+    return <KitchenPanel />;
+  }
+
+  if (!session.tableId || !session.token) {
+    return <QRLanding onLoadSession={loadSession} />;
+  }
+
+  return <CustomerMenu session={session} onResetSession={resetSession} />;
+}
