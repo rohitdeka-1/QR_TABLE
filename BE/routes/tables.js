@@ -10,6 +10,14 @@ router.get(
   controller.resolveSession,
 );
 router.get(
+  "/by-code/:code",
+  controller.getTableByCode,
+);
+router.get(
+  "/by-number/:tableNumber",
+  controller.getTableByNumber,
+);
+router.get(
   "/",
   authenticate,
   authorize(["admin", "staff"]),
@@ -58,6 +66,30 @@ router.delete(
   authenticate,
   authorize("admin"),
   controller.deleteTable,
+);
+router.delete(
+  "/",
+  authenticate,
+  authorize("admin"),
+  controller.deleteAllTables,
+);
+router.get(
+  "/download-all-qr",
+  authenticate,
+  authorize("admin"),
+  controller.downloadAllQrs,
+);
+router.patch(
+  "/set-restaurant-location-global",
+  authenticate,
+  authorize("admin"),
+  controller.setRestaurantLocationGlobal,
+);
+router.patch(
+  "/:tableId/set-location",
+  authenticate,
+  authorize("admin"),
+  controller.setRestaurantLocation,
 );
 
 export default router;

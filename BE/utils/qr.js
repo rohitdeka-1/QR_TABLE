@@ -6,16 +6,14 @@ function generateToken() {
   return crypto.randomBytes(18).toString('hex');
 }
 
-function buildQrUrl(tableId, accessCode, baseUrl = null) {
-  // Use the last origin (most likely main/production) or fallback to 5174
+function buildQrUrl(tableId, accessCode, tableNumber, baseUrl = null) {
   const base = baseUrl || config.clientOrigins[config.clientOrigins.length - 1] || 'http://localhost:5174';
-  return `${base}/?accessCode=${accessCode}&tableId=${tableId}`;
+  return `${base}/?accessCode=${accessCode}&tableId=${tableId}&tableNumber=${tableNumber}`;
 }
 
-// Generate QR code as data URL (base64 PNG for embedding in JSON responses)
-async function generateQrDataUrl(tableId, accessCode, baseUrl = null) {
+async function generateQrDataUrl(tableId, accessCode, tableNumber, baseUrl = null) {
   try {
-    const url = buildQrUrl(tableId, accessCode, baseUrl);
+    const url = buildQrUrl(tableId, accessCode, tableNumber, baseUrl);
     const dataUrl = await QRCode.toDataURL(url, {
       width: 300,
       errorCorrectionLevel: 'H',
@@ -28,10 +26,9 @@ async function generateQrDataUrl(tableId, accessCode, baseUrl = null) {
   }
 }
 
-// Generate QR code as PNG buffer for image endpoints
-async function generateQrPng(tableId, accessCode, baseUrl = null) {
+async function generateQrPng(tableId, accessCode, tableNumber, baseUrl = null) {
   try {
-    const url = buildQrUrl(tableId, accessCode, baseUrl);
+    const url = buildQrUrl(tableId, accessCode, tableNumber, baseUrl);
     const png = await QRCode.toBuffer(url, {
       width: 300,
       errorCorrectionLevel: 'H',

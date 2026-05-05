@@ -1,0 +1,132 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=Bricolage+Grotesque:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --app-bg: #f9f8f6;
+  --app-surface: #ffffff;
+  --app-border: #eae6df;
+  --admin-bg: #f4f3ef;
+  --kds-bg: #131313;
+  --kds-card: #1f1f22;
+  --text-primary: #2a2626;
+  --text-secondary: #5c5656;
+  --brand-primary: #c84b31;
+  --brand-secondary: #2d4221;
+  --brand-accent: #e6a15c;
+  --status-pending: #c84b31;
+  --status-preparing: #e6a15c;
+  --status-ready: #2d4221;
+  --status-served: #5c5656;
+}
+
+@layer base {
+  :root {
+    --background: 38 24% 97%;
+    --foreground: 12 5% 16%;
+    --card: 0 0% 100%;
+    --card-foreground: 12 5% 16%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 12 5% 16%;
+    --primary: 11 60% 49%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 38 16% 92%;
+    --secondary-foreground: 12 5% 16%;
+    --muted: 38 16% 92%;
+    --muted-foreground: 12 5% 35%;
+    --accent: 32 71% 63%;
+    --accent-foreground: 12 5% 16%;
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 35 16% 88%;
+    --input: 35 16% 88%;
+    --ring: 11 60% 49%;
+    --radius: 0.75rem;
+  }
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html,
+body,
+#root {
+  background-color: var(--app-bg);
+  color: var(--text-primary);
+  font-family: "Manrope", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-display {
+  font-family: "Bricolage Grotesque", "Manrope", sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.font-mono-display {
+  font-family: "JetBrains Mono", monospace;
+}
+
+/* KDS dark theme scope */
+.kds-root {
+  background-color: var(--kds-bg);
+  color: #f4f4f5;
+  min-height: 100vh;
+}
+
+.kds-card {
+  background-color: var(--kds-card);
+  border: 1px solid #2a2a2e;
+}
+
+/* Status border helpers */
+.border-l-pending {
+  border-left: 4px solid var(--status-pending);
+}
+.border-l-preparing {
+  border-left: 4px solid var(--status-preparing);
+}
+.border-l-ready {
+  border-left: 4px solid var(--status-ready);
+}
+.border-l-served {
+  border-left: 4px solid var(--status-served);
+}
+
+/* Glassmorphism cart bar */
+.glass-bar {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+/* Subtle grain */
+.grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.06 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  opacity: 0.5;
+  mix-blend-mode: multiply;
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+/* selection */
+::selection {
+  background: #c84b31;
+  color: #fff;
+}

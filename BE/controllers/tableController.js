@@ -1,8 +1,10 @@
 import Table from '../models/Table.js';
 import { generateToken, buildQrUrl, generateQrDataUrl, generateQrPng } from '../utils/qr.js';
+import { isWithinRadius } from '../utils/distance.js';
 import { validationResult } from 'express-validator';
 import fs from 'fs/promises';
 import path from 'path';
+import archiver from 'archiver';
 
 const QR_CODES_DIR = path.join(process.cwd(), 'QR codes');
 
@@ -29,16 +31,15 @@ async function saveQrToFile(tableId, tableNumber, qrVersion, token) {
   await fs.mkdir(QR_CODES_DIR, { recursive: true });
   const fileName = buildQrFileName(tableNumber, qrVersion);
   const filePath = path.join(QR_CODES_DIR, fileName);
-  const pngBuffer = await generateQrPng(tableId, token);
+  const pngBuffer = await generateQrPng(tableId, token, tableNumber);
   await fs.writeFile(filePath, pngBuffer);
   return filePath;
 }
 
-// Helper: Generate QR code and save to database
-async function generateAndSaveQrCode(tableId, token) {
+async function generateAndSaveQrCode(tableId, token, tableNumber) {
   try {
-    const qrDataUrl = await generateQrDataUrl(tableId, token);
-    const qrUrl = buildQrUrl(tableId, token);
+    const qrDataUrl = await generateQrDataUrl(tableId, token, tableNumber);
+    const qrUrl = buildQrUrl(tableId, token, tableNumber);
     return { qrDataUrl, qrUrl };
   } catch (err) {
     console.error('QR generation error:', err);
@@ -49,25 +50,33 @@ async function generateAndSaveQrCode(tableId, token) {
 async function createTable(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-  const normalizedTableNumber = normalizeTableNumber(req.body.tableNumber);
+
+  // accept both camelCase and snake_case from frontend
+  const incomingTableNumber = req.body.tableNumber ?? req.body.table_number;
+  const normalizedTableNumber = normalizeTableNumber(incomingTableNumber);
   if (!normalizedTableNumber) {
     return res.status(400).json({ message: 'tableNumber must be a positive integer (1, 2, 3...)' });
   }
 
   const { location } = req.body;
+  const label = req.body.label ?? '';
+  const restaurantId = req.user?.restaurantId || req.restaurantId || null;
+  if (!restaurantId) return res.status(400).json({ message: 'restaurantId required' });
+
   const token = generateToken();
   const accessCode = generateToken();
   
   try {
-    // Create the table first so QR URL includes a real tableId.
     const table = await Table.create({ 
+      restaurantId,
       tableNumber: normalizedTableNumber,
+      label,
       location, 
       qrToken: token,
       accessCode,
     });
 
-    const { qrDataUrl, qrUrl } = await generateAndSaveQrCode(table._id, accessCode);
+    const { qrDataUrl, qrUrl } = await generateAndSaveQrCode(table._id, accessCode, table.tableNumber);
     const qrFilePath = await saveQrToFile(table._id, table.tableNumber, table.qrVersion, accessCode);
 
     table.qrCodeImage = qrDataUrl;
@@ -76,16 +85,12 @@ async function createTable(req, res) {
     await table.save();
     
     res.status(201).json({ 
-      table: {
-        _id: table._id,
-        tableNumber: table.tableNumber,
-        location: table.location,
-        qrVersion: table.qrVersion,
-        qrFilePath: table.qrFilePath,
-      },
-      accessCode: table.accessCode,
+      id: table._id.toString(),
+      tableNumber: table.tableNumber,
+      label: table.label || '',
+      code: table.accessCode,
       qrUrl: qrUrl,
-      qrCode: qrDataUrl // Base64 PNG for immediate display
+      qrFilePath: table.qrFilePath,
     });
   } catch (err) {
     if (err.code === 11000) {
@@ -97,8 +102,11 @@ async function createTable(req, res) {
 }
 
 async function listTables(req, res) {
-  const tables = await Table.find({}).sort({ createdAt: 1 }).lean();
-  const sorted = tables.sort((a, b) => {
+  const tables = await Table.find({}).sort({ createdAt: 1 });
+  // filter by restaurant if available (admins should see only their restaurant)
+  const restaurantId = req.user?.restaurantId || req.restaurantId || null;
+  const filtered = restaurantId ? tables.filter(t => String(t.restaurantId) === String(restaurantId)) : tables;
+  const sorted = filtered.sort((a, b) => {
     const aNum = Number(a.tableNumber);
     const bNum = Number(b.tableNumber);
     if (Number.isNaN(aNum) && Number.isNaN(bNum)) return String(a.tableNumber).localeCompare(String(b.tableNumber));
@@ -106,7 +114,18 @@ async function listTables(req, res) {
     if (Number.isNaN(bNum)) return -1;
     return aNum - bNum;
   });
-  res.json(sorted);
+  
+  // Format response with consistent field names
+  const formatted = sorted.map(table => ({
+    id: table._id.toString(),
+    tableNumber: table.tableNumber,
+    label: table.label || '',
+    code: table.accessCode,
+    qrUrl: buildQrUrl(table._id.toString(), table.accessCode, table.tableNumber),
+    qrFilePath: table.qrFilePath,
+  }));
+  
+  res.json(formatted);
 }
 
 async function updateTable(req, res) {
@@ -119,15 +138,20 @@ async function updateTable(req, res) {
   }
 
   let didChangeTableNumber = false;
-  if (Object.prototype.hasOwnProperty.call(req.body, 'tableNumber')) {
-    const normalizedTableNumber = normalizeTableNumber(req.body.tableNumber);
+  // Accept camelCase or snake_case
+  const incomingTableNumber = Object.prototype.hasOwnProperty.call(req.body, 'tableNumber') ? req.body.tableNumber : req.body.table_number;
+  if (incomingTableNumber !== undefined) {
+    const normalizedTableNumber = normalizeTableNumber(incomingTableNumber);
     if (!normalizedTableNumber) {
       return res.status(400).json({ message: 'tableNumber must be a positive integer (1, 2, 3...)' });
     }
     updates.tableNumber = normalizedTableNumber;
     didChangeTableNumber = normalizedTableNumber !== table.tableNumber;
   }
-
+  if (Object.prototype.hasOwnProperty.call(req.body, 'label')) {
+    updates.label = req.body.label;
+  }
+  
   try {
     const updated = await Table.findByIdAndUpdate(
       req.params.id,
@@ -155,10 +179,66 @@ async function deleteTable(req, res) {
   res.status(204).send();
 }
 
+async function deleteAllTables(req, res) {
+  try {
+    const result = await Table.deleteMany({});
+    res.json({
+      message: 'All tables deleted successfully',
+      deletedCount: result.deletedCount || 0,
+    });
+  } catch (err) {
+    console.error('Delete all tables error:', err);
+    res.status(500).json({ message: 'Failed to delete all tables' });
+  }
+}
+
+// Download all QR PNG files as a zip archive
+async function downloadAllQrs(req, res) {
+  try {
+    // Ensure QR codes directory exists
+    const dir = QR_CODES_DIR;
+    // Use fs.readdir from promises
+    let files = [];
+    try {
+      files = await fs.readdir(dir);
+    } catch (e) {
+      // If directory doesn't exist, return empty zip
+      files = [];
+    }
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="all-qrs.zip"');
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err) => {
+      console.error('Archive error:', err);
+      res.status(500).end();
+    });
+
+    archive.pipe(res);
+
+    for (const fileName of files) {
+      const filePath = path.join(dir, fileName);
+      // Only include png files
+      if (fileName.toLowerCase().endsWith('.png')) {
+        archive.file(filePath, { name: fileName });
+      }
+    }
+
+    await archive.finalize();
+  } catch (err) {
+    console.error('Download all QR error:', err);
+    res.status(500).json({ message: 'Failed to create QR zip' });
+  }
+}
+
 async function syncTableRange(req, res) {
   const start = Number(req.body.startNumber);
   const end = Number(req.body.endNumber);
   const pruneOutside = Boolean(req.body.pruneOutside);
+  const restaurantId = req.user?.restaurantId || req.restaurantId || null;
+  
+  if (!restaurantId) return res.status(400).json({ message: 'restaurantId required' });
 
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < 1 || start > end) {
     return res.status(400).json({ message: 'startNumber and endNumber must be positive integers, with startNumber <= endNumber' });
@@ -169,7 +249,8 @@ async function syncTableRange(req, res) {
     targetTableNumbers.add(String(tableNumber));
   }
 
-  const existingTables = await Table.find({}).lean();
+  // Only get tables for this restaurant
+  const existingTables = await Table.find({ restaurantId }).lean();
   const existingByNumber = new Map(existingTables.map((table) => [String(table.tableNumber), table]));
 
   const created = [];
@@ -179,6 +260,7 @@ async function syncTableRange(req, res) {
 
     const token = generateToken();
     const table = await Table.create({
+      restaurantId,
       tableNumber: tableNumberValue,
       location: `Range ${start}-${end}`,
       qrToken: token,
@@ -203,7 +285,8 @@ async function syncTableRange(req, res) {
     }
   }
 
-  const refreshed = await Table.find({}).sort({ createdAt: 1 }).lean();
+  // Only return tables for this restaurant
+  const refreshed = await Table.find({ restaurantId }).sort({ createdAt: 1 }).lean();
   const sorted = refreshed.sort((a, b) => {
     const aNum = Number(a.tableNumber);
     const bNum = Number(b.tableNumber);
@@ -316,14 +399,181 @@ async function getQrPng(req, res) {
 
 async function resolveSession(req, res) {
   const { accessCode } = req.params;
+  const { customerLat, customerLng } = req.query;
+  
   const table = await Table.findOne({ accessCode }).lean();
   if (!table) return res.status(404).json({ message: 'Table not found' });
+  
+  // Check geolocation if restaurant location is set and customer location provided
+  if (table.restaurantLat && table.restaurantLng && customerLat && customerLng) {
+    const customerLatNum = parseFloat(customerLat);
+    const customerLngNum = parseFloat(customerLng);
+    
+    if (isNaN(customerLatNum) || isNaN(customerLngNum)) {
+      return res.status(400).json({ 
+        message: 'Invalid customer coordinates',
+        code: 'INVALID_COORDS'
+      });
+    }
+    
+    const { isWithinRadius: withinRadius, distance } = isWithinRadius(
+      customerLatNum,
+      customerLngNum,
+      table.restaurantLat,
+      table.restaurantLng,
+      10 // 10km radius
+    );
+    
+    if (!withinRadius) {
+      return res.status(403).json({
+        message: `You are ${distance}km away from the restaurant. You must be within 10km to order.`,
+        code: 'OUT_OF_RANGE',
+        distance,
+        maxDistance: 10,
+      });
+    }
+  }
+  
   res.json({
     tableId: String(table._id),
     token: table.qrToken,
+    restaurantId: table.restaurantId ? String(table.restaurantId) : null,
     tableNumber: table.tableNumber,
     location: table.location || '',
+    restaurantLat: table.restaurantLat,
+    restaurantLng: table.restaurantLng,
   });
+}
+
+/**
+ * Set or update restaurant location for a table
+ * POST /tables/:tableId/set-location
+ * Body: { restaurantLat, restaurantLng }
+ */
+async function setRestaurantLocation(req, res) {
+  const { tableId } = req.params;
+  const { restaurantLat, restaurantLng } = req.body;
+  
+  if (restaurantLat === undefined || restaurantLng === undefined) {
+    return res.status(400).json({ message: 'restaurantLat and restaurantLng are required' });
+  }
+  
+  const lat = parseFloat(restaurantLat);
+  const lng = parseFloat(restaurantLng);
+  
+  if (isNaN(lat) || isNaN(lng)) {
+    return res.status(400).json({ message: 'Invalid coordinates' });
+  }
+  
+  if (lat < -90 || lat > 90) {
+    return res.status(400).json({ message: 'Latitude must be between -90 and 90' });
+  }
+  
+  if (lng < -180 || lng > 180) {
+    return res.status(400).json({ message: 'Longitude must be between -180 and 180' });
+  }
+  
+  try {
+    const table = await Table.findByIdAndUpdate(
+      tableId,
+      { restaurantLat: lat, restaurantLng: lng, updatedAt: new Date() },
+      { new: true }
+    );
+    
+    if (!table) {
+      return res.status(404).json({ message: 'Table not found' });
+    }
+    
+    res.json({
+      message: 'Restaurant location updated',
+      table: {
+        _id: table._id,
+        tableNumber: table.tableNumber,
+        restaurantLat: table.restaurantLat,
+        restaurantLng: table.restaurantLng,
+      },
+    });
+  } catch (err) {
+    console.error('Error setting restaurant location:', err);
+    res.status(500).json({ message: 'Failed to set restaurant location' });
+  }
+}
+
+/**
+ * Set restaurant location for ALL tables globally
+ * PATCH /tables/set-restaurant-location-global
+ * Body: { restaurantLat, restaurantLng }
+ */
+async function setRestaurantLocationGlobal(req, res) {
+  const { restaurantLat, restaurantLng } = req.body;
+
+  if (restaurantLat === undefined || restaurantLng === undefined) {
+    return res.status(400).json({ message: 'restaurantLat and restaurantLng are required' });
+  }
+
+  const lat = parseFloat(restaurantLat);
+  const lng = parseFloat(restaurantLng);
+
+  if (isNaN(lat) || isNaN(lng)) {
+    return res.status(400).json({ message: 'Invalid coordinates' });
+  }
+
+  if (lat < -90 || lat > 90) {
+    return res.status(400).json({ message: 'Latitude must be between -90 and 90' });
+  }
+
+  if (lng < -180 || lng > 180) {
+    return res.status(400).json({ message: 'Longitude must be between -180 and 180' });
+  }
+
+  try {
+    const result = await Table.updateMany(
+      {},
+      { restaurantLat: lat, restaurantLng: lng, updatedAt: new Date() }
+    );
+
+    res.json({
+      message: `Restaurant location updated for ${result.modifiedCount} table(s)`,
+      restaurantLat: lat,
+      restaurantLng: lng,
+      tablesUpdated: result.modifiedCount,
+    });
+  } catch (err) {
+    console.error('Error setting global restaurant location:', err);
+    res.status(500).json({ message: 'Failed to set restaurant location' });
+  }
+}
+
+/**
+ * Find table by access code (used by customer QR scanner)
+ * GET /tables/by-code/:code
+ */
+async function getTableByCode(req, res) {
+  const { code } = req.params;
+  try {
+    const table = await Table.findOne({ accessCode: code }).lean();
+    if (!table) return res.status(404).json({ message: 'Table not found' });
+    res.json(table);
+  } catch (err) {
+    console.error('Get table by code error:', err);
+    res.status(500).json({ message: 'Failed to retrieve table' });
+  }
+}
+
+/**
+ * Find table by table number (used by new QR format with table parameter)
+ * GET /tables/by-number/:tableNumber
+ */
+async function getTableByNumber(req, res) {
+  const { tableNumber } = req.params;
+  try {
+    const table = await Table.findOne({ tableNumber: normalizeTableNumber(tableNumber) }).lean();
+    if (!table) return res.status(404).json({ message: 'Table not found' });
+    res.json(table);
+  } catch (err) {
+    console.error('Get table by number error:', err);
+    res.status(500).json({ message: 'Failed to retrieve table' });
+  }
 }
 
 export {
@@ -331,9 +581,15 @@ export {
   listTables,
   updateTable,
   deleteTable,
+  deleteAllTables,
+  downloadAllQrs,
   syncTableRange,
   resolveSession,
+  setRestaurantLocation,
+  setRestaurantLocationGlobal,
   regenerateQr,
   getQr,
   getQrPng,
+  getTableByCode,
+  getTableByNumber,
 };

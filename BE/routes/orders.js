@@ -20,6 +20,10 @@ router.get(
   authorize(["admin", "staff", "cashier"]),
   controller.listOrders,
 );
+router.get(
+  "/:id",
+  controller.getOrder,
+);
 router.patch(
   "/:id/status",
   authenticate,
