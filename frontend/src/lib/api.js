@@ -2,9 +2,10 @@ import axios from "axios";
 
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL ||
-  import.meta.env.VITE_API_URL ||
-  process.env.REACT_APP_BACKEND_URL ||
-  "http://localhost:4000";
+  (import.meta.env.PROD
+    ? "https://servesmile-jobs-qrtable.ys7gan.easypanel.host"
+    : "http://localhost:4000");
+
 export const API = `${BACKEND_URL}/api`;
 
 export const api = axios.create({
