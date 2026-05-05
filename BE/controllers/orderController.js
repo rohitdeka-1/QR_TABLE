@@ -23,7 +23,15 @@ function scheduleStatusTransition(orderId) {
         await order.save();
         // Publish status change event
         try {
+          const populatedOrder = await Order.findById(order._id).populate('tableId');
+          const queueSnapshot = await buildQueueSnapshot(populatedOrder.restaurantId);
+          const queuePosition = queueSnapshot.find((entry) => String(entry._id) === String(populatedOrder._id))?.queuePosition || null;
+          const enrichedOrder = withQueuePosition(populatedOrder, queuePosition);
+
           await publish('order.status-changed', { orderId: String(orderId), status: 'preparing', restaurantId: String(order.restaurantId) });
+          await publish('order.updated', { order: enrichedOrder, restaurantId: String(populatedOrder.restaurantId), orderId: String(order._id), tableId: String(order.tableId) });
+          await publish('queue.snapshot', { queueSnapshot, restaurantId: String(populatedOrder.restaurantId) });
+          await publish('order.to.table', { order: enrichedOrder, restaurantId: String(populatedOrder.restaurantId), tableId: String(order.tableId), orderId: String(order._id) });
         } catch (e) {
           // ignore publish errors
         }
@@ -48,7 +56,7 @@ async function createOrder(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-  const { tableId, token, items, customerName, taxAmount, totalAmount: requestedTotalAmount } = req.body;
+  const { tableId, token, items, customerName, paymentMode, taxAmount, totalAmount: requestedTotalAmount } = req.body;
   if (!tableId || !token || !items || !items.length) return res.status(400).json({ message: 'Invalid payload' });
 
   const table = await Table.findById(tableId);
@@ -94,6 +102,7 @@ async function createOrder(req, res) {
     taxAmount: tax,
     totalAmount,
     customerName: customerName || '',
+    paymentMode: paymentMode || 'cash',
   });
   
   // Schedule automatic status transition from pending to preparing after 3 seconds
@@ -154,9 +163,20 @@ function toCustomerOrder(order) {
 }
 
 async function getOrder(req, res) {
-  const order = await Order.findById(req.params.id).populate('tableId');
-  if (!order) return res.status(404).json({ message: 'Order not found' });
-  res.json(toCustomerOrder(order));
+  try {
+    const order = await Order.findById(req.params.id).populate('tableId');
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    // Require the table's QR token so only the device that placed the order can track it
+    const providedToken = req.query.token || req.headers['x-table-token'];
+    if (!providedToken || order.tableId?.qrToken !== providedToken) {
+      return res.status(403).json({ message: 'Forbidden: invalid or missing table token' });
+    }
+
+    res.json(toCustomerOrder(order));
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
 }
 
 async function updateStatus(req, res) {

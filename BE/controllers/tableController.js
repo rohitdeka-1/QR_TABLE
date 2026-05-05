@@ -2,11 +2,9 @@ import Table from '../models/Table.js';
 import { generateToken, buildQrUrl, generateQrDataUrl, generateQrPng } from '../utils/qr.js';
 import { isWithinRadius } from '../utils/distance.js';
 import { validationResult } from 'express-validator';
-import fs from 'fs/promises';
+
 import path from 'path';
 import archiver from 'archiver';
-
-const QR_CODES_DIR = path.join(process.cwd(), 'QR codes');
 
 function normalizeTableNumber(value) {
   const raw = String(value ?? '').trim();
@@ -22,19 +20,7 @@ function ensureAccessCode(table) {
   return table.accessCode;
 }
 
-function buildQrFileName(tableNumber, qrVersion) {
-  const safeTableNumber = String(tableNumber).replace(/[^a-zA-Z0-9-_]/g, '_');
-  return `${safeTableNumber}-v${qrVersion}.png`;
-}
 
-async function saveQrToFile(tableId, tableNumber, qrVersion, token) {
-  await fs.mkdir(QR_CODES_DIR, { recursive: true });
-  const fileName = buildQrFileName(tableNumber, qrVersion);
-  const filePath = path.join(QR_CODES_DIR, fileName);
-  const pngBuffer = await generateQrPng(tableId, token, tableNumber);
-  await fs.writeFile(filePath, pngBuffer);
-  return filePath;
-}
 
 async function generateAndSaveQrCode(tableId, token, tableNumber) {
   try {
@@ -65,32 +51,29 @@ async function createTable(req, res) {
 
   const token = generateToken();
   const accessCode = generateToken();
-  
+
   try {
-    const table = await Table.create({ 
+    const table = await Table.create({
       restaurantId,
       tableNumber: normalizedTableNumber,
       label,
-      location, 
+      location,
       qrToken: token,
       accessCode,
     });
 
     const { qrDataUrl, qrUrl } = await generateAndSaveQrCode(table._id, accessCode, table.tableNumber);
-    const qrFilePath = await saveQrToFile(table._id, table.tableNumber, table.qrVersion, accessCode);
 
     table.qrCodeImage = qrDataUrl;
     table.qrUrl = qrUrl;
-    table.qrFilePath = qrFilePath;
     await table.save();
-    
-    res.status(201).json({ 
+
+    res.status(201).json({
       id: table._id.toString(),
       tableNumber: table.tableNumber,
       label: table.label || '',
       code: table.accessCode,
       qrUrl: qrUrl,
-      qrFilePath: table.qrFilePath,
     });
   } catch (err) {
     if (err.code === 11000) {
@@ -114,7 +97,7 @@ async function listTables(req, res) {
     if (Number.isNaN(bNum)) return -1;
     return aNum - bNum;
   });
-  
+
   // Format response with consistent field names
   const formatted = sorted.map(table => ({
     id: table._id.toString(),
@@ -122,9 +105,8 @@ async function listTables(req, res) {
     label: table.label || '',
     code: table.accessCode,
     qrUrl: buildQrUrl(table._id.toString(), table.accessCode, table.tableNumber),
-    qrFilePath: table.qrFilePath,
   }));
-  
+
   res.json(formatted);
 }
 
@@ -151,7 +133,7 @@ async function updateTable(req, res) {
   if (Object.prototype.hasOwnProperty.call(req.body, 'label')) {
     updates.label = req.body.label;
   }
-  
+
   try {
     const updated = await Table.findByIdAndUpdate(
       req.params.id,
@@ -160,7 +142,9 @@ async function updateTable(req, res) {
     );
 
     if (didChangeTableNumber) {
-      updated.qrFilePath = await saveQrToFile(updated._id, updated.tableNumber, updated.qrVersion, ensureAccessCode(updated));
+      const { qrDataUrl, qrUrl } = await generateAndSaveQrCode(updated._id, ensureAccessCode(updated), updated.tableNumber);
+      updated.qrCodeImage = qrDataUrl;
+      updated.qrUrl = qrUrl;
       await updated.save();
     }
 
@@ -195,16 +179,7 @@ async function deleteAllTables(req, res) {
 // Download all QR PNG files as a zip archive
 async function downloadAllQrs(req, res) {
   try {
-    // Ensure QR codes directory exists
-    const dir = QR_CODES_DIR;
-    // Use fs.readdir from promises
-    let files = [];
-    try {
-      files = await fs.readdir(dir);
-    } catch (e) {
-      // If directory doesn't exist, return empty zip
-      files = [];
-    }
+    const tables = await Table.find({}).lean();
 
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="all-qrs.zip"');
@@ -217,12 +192,11 @@ async function downloadAllQrs(req, res) {
 
     archive.pipe(res);
 
-    for (const fileName of files) {
-      const filePath = path.join(dir, fileName);
-      // Only include png files
-      if (fileName.toLowerCase().endsWith('.png')) {
-        archive.file(filePath, { name: fileName });
-      }
+    for (const table of tables) {
+      const pngBuffer = await generateQrPng(table._id.toString(), table.accessCode, table.tableNumber);
+      const safeTableNumber = String(table.tableNumber).replace(/[^a-zA-Z0-9-_]/g, '_');
+      const fileName = `${safeTableNumber}-v${table.qrVersion || 1}.png`;
+      archive.append(pngBuffer, { name: fileName });
     }
 
     await archive.finalize();
@@ -237,7 +211,7 @@ async function syncTableRange(req, res) {
   const end = Number(req.body.endNumber);
   const pruneOutside = Boolean(req.body.pruneOutside);
   const restaurantId = req.user?.restaurantId || req.restaurantId || null;
-  
+
   if (!restaurantId) return res.status(400).json({ message: 'restaurantId required' });
 
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < 1 || start > end) {
@@ -266,10 +240,9 @@ async function syncTableRange(req, res) {
       qrToken: token,
       accessCode: generateToken(),
     });
-    const { qrDataUrl, qrUrl } = await generateAndSaveQrCode(table._id, table.accessCode);
+    const { qrDataUrl, qrUrl } = await generateAndSaveQrCode(table._id, table.accessCode, table.tableNumber);
     table.qrCodeImage = qrDataUrl;
     table.qrUrl = qrUrl;
-    table.qrFilePath = await saveQrToFile(table._id, table.tableNumber, table.qrVersion, table.accessCode);
     await table.save();
     created.push(table);
   }
@@ -309,26 +282,23 @@ async function syncTableRange(req, res) {
 async function regenerateQr(req, res) {
   const table = await Table.findById(req.params.id);
   if (!table) return res.status(404).json({ message: 'Table not found' });
-  
+
   try {
     table.qrVersion = (table.qrVersion || 1) + 1;
     table.qrToken = generateToken();
     table.accessCode = generateToken();
-    
+
     // Generate new QR code
-    const { qrDataUrl, qrUrl } = await generateAndSaveQrCode(table._id, table.accessCode);
-    const qrFilePath = await saveQrToFile(table._id, table.tableNumber, table.qrVersion, table.accessCode);
-    
+    const { qrDataUrl, qrUrl } = await generateAndSaveQrCode(table._id, table.accessCode, table.tableNumber);
+
     // Update table with new QR code
     table.qrCodeImage = qrDataUrl;
     table.qrUrl = qrUrl;
-    table.qrFilePath = qrFilePath;
     await table.save();
-    
-    res.json({ 
-      qrUrl: qrUrl, 
+
+    res.json({
+      qrUrl: qrUrl,
       qrVersion: table.qrVersion,
-      qrFilePath: table.qrFilePath,
       qrCode: qrDataUrl // Base64 PNG for display
     });
   } catch (err) {
@@ -340,24 +310,22 @@ async function regenerateQr(req, res) {
 async function getQr(req, res) {
   const table = await Table.findById(req.params.id);
   if (!table) return res.status(404).json({ message: 'Table not found' });
-  
+
   try {
     // If QR code is stored, return it; otherwise generate
     let qrDataUrl = table.qrCodeImage;
     if (!qrDataUrl) {
       ensureAccessCode(table);
-      const { qrDataUrl: generated, qrUrl } = await generateAndSaveQrCode(table._id, table.accessCode);
+      const { qrDataUrl: generated, qrUrl } = await generateAndSaveQrCode(table._id, table.accessCode, table.tableNumber);
       qrDataUrl = generated;
       table.qrCodeImage = generated;
       table.qrUrl = qrUrl;
-      table.qrFilePath = await saveQrToFile(table._id, table.tableNumber, table.qrVersion, table.accessCode);
       await table.save();
     }
-    
-    res.json({ 
-      qrUrl: table.qrUrl || buildQrUrl(table._id, table.accessCode), 
+
+    res.json({
+      qrUrl: table.qrUrl || buildQrUrl(table._id, table.accessCode, table.tableNumber),
       qrVersion: table.qrVersion,
-      qrFilePath: table.qrFilePath,
       qrCode: qrDataUrl // Base64 PNG for display
     });
   } catch (err) {
@@ -370,27 +338,14 @@ async function getQr(req, res) {
 async function getQrPng(req, res) {
   const table = await Table.findById(req.params.id);
   if (!table) return res.status(404).json({ message: 'Table not found' });
-  
-  try {
-    let filePath = table.qrFilePath;
-    if (!filePath) {
-      ensureAccessCode(table);
-      filePath = await saveQrToFile(table._id, table.tableNumber, table.qrVersion, table.accessCode);
-      table.qrFilePath = filePath;
-      await table.save();
-    }
 
-    try {
-      await fs.access(filePath);
-    } catch {
-      filePath = await saveQrToFile(table._id, table.tableNumber, table.qrVersion, table.accessCode || ensureAccessCode(table));
-      table.qrFilePath = filePath;
-      await table.save();
-    }
+  try {
+    ensureAccessCode(table);
+    const pngBuffer = await generateQrPng(table._id.toString(), table.accessCode, table.tableNumber);
 
     res.set('Content-Type', 'image/png');
     res.set('Content-Disposition', `attachment; filename="table-${table.tableNumber}-qr.png"`);
-    res.sendFile(path.resolve(filePath));
+    res.send(pngBuffer);
   } catch (err) {
     console.error('Get QR PNG error:', err);
     res.status(500).json({ message: 'QR code generation failed' });
@@ -400,22 +355,22 @@ async function getQrPng(req, res) {
 async function resolveSession(req, res) {
   const { accessCode } = req.params;
   const { customerLat, customerLng } = req.query;
-  
-  const table = await Table.findOne({ accessCode }).lean();
+
+  const table = await Table.findOne({ accessCode }).populate('restaurantId').lean();
   if (!table) return res.status(404).json({ message: 'Table not found' });
-  
+
   // Check geolocation if restaurant location is set and customer location provided
   if (table.restaurantLat && table.restaurantLng && customerLat && customerLng) {
     const customerLatNum = parseFloat(customerLat);
     const customerLngNum = parseFloat(customerLng);
-    
+
     if (isNaN(customerLatNum) || isNaN(customerLngNum)) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         message: 'Invalid customer coordinates',
         code: 'INVALID_COORDS'
       });
     }
-    
+
     const { isWithinRadius: withinRadius, distance } = isWithinRadius(
       customerLatNum,
       customerLngNum,
@@ -423,7 +378,7 @@ async function resolveSession(req, res) {
       table.restaurantLng,
       10 // 10km radius
     );
-    
+
     if (!withinRadius) {
       return res.status(403).json({
         message: `You are ${distance}km away from the restaurant. You must be within 10km to order.`,
@@ -433,11 +388,13 @@ async function resolveSession(req, res) {
       });
     }
   }
-  
+
   res.json({
     tableId: String(table._id),
     token: table.qrToken,
-    restaurantId: table.restaurantId ? String(table.restaurantId) : null,
+    restaurantId: table.restaurantId ? String(table.restaurantId._id || table.restaurantId) : null,
+    restaurantName: table.restaurantId?.name || '',
+    coverImage: table.restaurantId?.coverImage || '',
     tableNumber: table.tableNumber,
     location: table.location || '',
     restaurantLat: table.restaurantLat,
@@ -453,37 +410,37 @@ async function resolveSession(req, res) {
 async function setRestaurantLocation(req, res) {
   const { tableId } = req.params;
   const { restaurantLat, restaurantLng } = req.body;
-  
+
   if (restaurantLat === undefined || restaurantLng === undefined) {
     return res.status(400).json({ message: 'restaurantLat and restaurantLng are required' });
   }
-  
+
   const lat = parseFloat(restaurantLat);
   const lng = parseFloat(restaurantLng);
-  
+
   if (isNaN(lat) || isNaN(lng)) {
     return res.status(400).json({ message: 'Invalid coordinates' });
   }
-  
+
   if (lat < -90 || lat > 90) {
     return res.status(400).json({ message: 'Latitude must be between -90 and 90' });
   }
-  
+
   if (lng < -180 || lng > 180) {
     return res.status(400).json({ message: 'Longitude must be between -180 and 180' });
   }
-  
+
   try {
     const table = await Table.findByIdAndUpdate(
       tableId,
       { restaurantLat: lat, restaurantLng: lng, updatedAt: new Date() },
       { new: true }
     );
-    
+
     if (!table) {
       return res.status(404).json({ message: 'Table not found' });
     }
-    
+
     res.json({
       message: 'Restaurant location updated',
       table: {
@@ -551,8 +508,13 @@ async function setRestaurantLocationGlobal(req, res) {
 async function getTableByCode(req, res) {
   const { code } = req.params;
   try {
-    const table = await Table.findOne({ accessCode: code }).lean();
+    const table = await Table.findOne({ accessCode: code }).populate('restaurantId').lean();
     if (!table) return res.status(404).json({ message: 'Table not found' });
+    if (table.restaurantId) {
+      table.restaurantName = table.restaurantId.name;
+      table.coverImage = table.restaurantId.coverImage;
+      table.restaurantId = table.restaurantId._id;
+    }
     res.json(table);
   } catch (err) {
     console.error('Get table by code error:', err);
@@ -567,8 +529,13 @@ async function getTableByCode(req, res) {
 async function getTableByNumber(req, res) {
   const { tableNumber } = req.params;
   try {
-    const table = await Table.findOne({ tableNumber: normalizeTableNumber(tableNumber) }).lean();
+    const table = await Table.findOne({ tableNumber: normalizeTableNumber(tableNumber) }).populate('restaurantId').lean();
     if (!table) return res.status(404).json({ message: 'Table not found' });
+    if (table.restaurantId) {
+      table.restaurantName = table.restaurantId.name;
+      table.coverImage = table.restaurantId.coverImage;
+      table.restaurantId = table.restaurantId._id;
+    }
     res.json(table);
   } catch (err) {
     console.error('Get table by number error:', err);

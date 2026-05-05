@@ -41,7 +41,7 @@ async function start() {
   app.use(morgan('dev'));
   app.use(express.json());
   app.use(cors(corsOptions));
-  // app.use(rateLimiter);
+  app.use(rateLimiter);
 
   // Serve uploaded images
   app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));

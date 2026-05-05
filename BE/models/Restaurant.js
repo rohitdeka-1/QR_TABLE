@@ -11,6 +11,7 @@ const RestaurantSchema = new mongoose.Schema({
     latitude: { type: Number },
     longitude: { type: Number },
   },
+  coverImage: { type: String },
   settings: { type: Object, default: {} },
   createdAt: { type: Date, default: Date.now },
 });

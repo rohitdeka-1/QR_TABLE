@@ -13,7 +13,6 @@ const TableSchema = new mongoose.Schema({
   qrVersion: { type: Number, default: 1 },
   qrCodeImage: { type: String }, // Base64 PNG data URL (persisted)
   qrUrl: { type: String }, // The menu URL encoded in QR
-  qrFilePath: { type: String }, // Absolute path to saved QR PNG file
   location: { type: String },
   restaurantLat: { type: Number }, // Restaurant latitude for geolocation
   restaurantLng: { type: Number }, // Restaurant longitude for geolocation

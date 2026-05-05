@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { api, formatError } from "@/lib/api";
 import { useCart } from "@/lib/cart";
-import { Plus, Minus, ShoppingBag, X, ChevronLeft } from "lucide-react";
+import { Plus, Minus, ShoppingBag, X, ChevronLeft, Camera } from "lucide-react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -25,6 +25,7 @@ export default function CustomerMenu() {
   const [cartOpen, setCartOpen] = useState(false);
   const [placing, setPlacing] = useState(false);
   const [customerName, setCustomerName] = useState("");
+  const [paymentMode, setPaymentMode] = useState("cash");
 
   // Fetch table by number or code
   useEffect(() => {
@@ -116,6 +117,7 @@ export default function CustomerMenu() {
         tableId,
         token,
         customerName,
+        paymentMode,
         items: cart.map((c) => ({ itemId: c.id, qty: c.quantity })),
         subtotal,
         taxAmount,
@@ -123,10 +125,13 @@ export default function CustomerMenu() {
       };
 
       const res = await api.post("/orders", orderPayload);
+      const newOrderId = res.data._id || res.data.id;
+      // Store the table token so the tracking page can authenticate with the backend
+      sessionStorage.setItem(`order_token_${newOrderId}`, token);
       clear();
       setCartOpen(false);
       toast.success("Order placed!");
-      navigate(`/order/${res.data._id || res.data.id}`);
+      navigate(`/order/${newOrderId}?token=${encodeURIComponent(token)}`);
     } catch (e) {
       toast.error(formatError(e));
     } finally {
@@ -134,22 +139,65 @@ export default function CustomerMenu() {
     }
   };
 
+  const handleCoverUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      toast.error("You must be logged in as an admin to change the cover image");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("image", file);
+
+    try {
+      const res = await api.post("/admin/restaurant/cover", formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      setTable(prev => ({ ...prev, coverImage: res.data.coverImage }));
+      toast.success("Cover image updated successfully!");
+    } catch (error) {
+      toast.error(formatError(error));
+    }
+  };
+
+  const isAdmin = !!localStorage.getItem('token');
+
   return (
     <div className="min-h-screen pb-32 bg-[#f9f8f6]" data-testid="customer-menu">
       {/* Hero */}
-      <div className="relative h-56 sm:h-64 overflow-hidden">
+      <div className="relative h-56 sm:h-64 overflow-hidden group">
         <img
-          src="https://images.unsplash.com/photo-1770816307454-892c27fc625e?w=1200&q=80"
+          src={table?.coverImage || "https://images.unsplash.com/photo-1770816307454-892c27fc625e?w=1200&q=80"}
           alt="Restaurant"
-          className="w-full h-full object-cover"
+          className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-[#2a2626]/85 via-[#2a2626]/30 to-transparent" />
+
+        {isAdmin && (
+          <div className="absolute top-4 right-4 z-10">
+            <label className="cursor-pointer bg-black/50 hover:bg-black/70 text-white p-2 rounded-full backdrop-blur-sm transition-colors flex items-center justify-center">
+              <Camera size={20} />
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleCoverUpload}
+              />
+            </label>
+          </div>
+        )}
         <div className="absolute inset-x-0 bottom-0 p-5 text-white">
           <div className="text-[11px] uppercase tracking-[0.2em] opacity-80">
             {table ? `Table ${table.tableNumber}` : "Loading..."}
           </div>
           <h1 className="font-display text-3xl sm:text-4xl font-semibold mt-1">
-            's menu
+            {table?.restaurantName}
           </h1>
         </div>
       </div>
@@ -165,11 +213,10 @@ export default function CustomerMenu() {
                 setActiveCat(c.name);
                 document.getElementById(`cat-${c._id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
               }}
-              className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                activeCat === c.name
-                  ? "bg-[#2a2626] text-white"
-                  : "bg-white text-[#2a2626] border border-[#eae6df]"
-              }`}
+              className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${activeCat === c.name
+                ? "bg-[#2a2626] text-white"
+                : "bg-white text-[#2a2626] border border-[#eae6df]"
+                }`}
             >
               {c.name}
             </button>
@@ -206,7 +253,7 @@ export default function CustomerMenu() {
                             ₹{it.price.toFixed(2)}
                           </div>
                           {inCart ? (
-                            <div 
+                            <div
                               className="flex items-center gap-2 bg-[#f4f3ef] rounded-full p-1"
                               onClick={(e) => e.stopPropagation()}
                             >
@@ -351,6 +398,23 @@ export default function CustomerMenu() {
                   className="w-full mt-1 px-4 py-2.5 rounded-xl border border-[#eae6df] bg-white focus:outline-none focus:border-[#c84b31]"
                   placeholder="John"
                 />
+              </div>
+              <div className="mt-5">
+                <label className="text-xs uppercase tracking-wider text-[#5c5656]">Pay after eating with:</label>
+                <div className="flex gap-2 mt-2">
+                  {['cash', 'card', 'upi'].map(mode => (
+                    <button
+                      key={mode}
+                      onClick={() => setPaymentMode(mode)}
+                      className={`flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-colors ${paymentMode === mode
+                        ? 'border-[#c84b31] bg-[#c84b31]/10 text-[#c84b31]'
+                        : 'border-[#eae6df] text-[#5c5656]'
+                        }`}
+                    >
+                      {mode.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="mt-5 pt-5 border-t border-[#eae6df]">
                 <div className="space-y-2 mb-4">

@@ -170,10 +170,17 @@ export default function Kitchen() {
                           <div className="text-[10px] uppercase tracking-widest text-zinc-500">
                             Table {tableNum}
                           </div>
-                          <div className="text-lg font-semibold">#{orderId.slice(0, 6)}</div>
+                          <div className="text-lg font-semibold">#{orderId.slice(-5)}</div>
                         </div>
-                        <div className="text-2xl font-bold" style={{ color: col.color }}>
-                          {elapsed(o.createdAt || o.created_at)}
+                        <div className="flex items-center gap-4">
+                          {o.queueNumber && (
+                            <div className="text-3xl font-display font-bold text-zinc-500">
+                              Q{o.queueNumber}
+                            </div>
+                          )}
+                          <div className="text-2xl font-bold" style={{ color: col.color }}>
+                            {elapsed(o.createdAt || o.created_at)}
+                          </div>
                         </div>
                       </div>
                       <div className="mt-3 space-y-1 text-sm border-t border-zinc-800 pt-3">

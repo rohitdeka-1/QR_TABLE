@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { api, formatError } from "@/lib/api";
 import { Check, Clock, ChefHat } from "lucide-react";
+import { io } from "socket.io-client";
 import { toast } from "sonner";
 
 const STATUS_FLOW = ["pending", "preparing", "served"];
@@ -13,11 +14,15 @@ const STATUS_META = {
 
 export default function OrderTracking() {
   const { orderId } = useParams();
+  const [searchParams] = useSearchParams();
+  // The table token is stored in sessionStorage when the customer places the order
+  // and also available as a URL param for deep links
+  const token = searchParams.get("token") || sessionStorage.getItem(`order_token_${orderId}`) || "";
   const [order, setOrder] = useState(null);
 
   const load = async () => {
     try {
-      const res = await api.get(`/orders/${orderId}`);
+      const res = await api.get(`/orders/${orderId}`, { params: { token } });
       setOrder(res.data);
     } catch (e) {
       toast.error(formatError(e));
@@ -26,8 +31,39 @@ export default function OrderTracking() {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 2000);
-    return () => clearInterval(interval);
+
+    // Connect to WebSocket to listen for order updates instead of polling
+    let socket;
+    try {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:4000";
+      
+      socket = io(backendUrl, {
+        withCredentials: true,
+        reconnection: true,
+        transports: ["websocket", "polling"],
+      });
+
+      socket.on("connect", () => {
+        // Join this specific order's room — pass token to authenticate ownership
+        socket.emit("join", `order:${orderId}`, token);
+      });
+
+      // Listen for backend events
+      socket.on("order.status-changed", (data) => {
+        if (String(data.orderId) === String(orderId)) load();
+      });
+
+      socket.on("order.updated", (data) => {
+        if (String(data.orderId) === String(orderId)) load();
+      });
+
+    } catch (err) {
+      console.error("Failed to initialize WebSocket:", err);
+    }
+    
+    return () => {
+      if (socket) socket.disconnect();
+    };
     // eslint-disable-next-line
   }, [orderId]);
 
@@ -42,7 +78,7 @@ export default function OrderTracking() {
     <div className="min-h-screen bg-[#f9f8f6] py-10 px-4" data-testid="order-tracking">
       <div className="max-w-xl mx-auto">
         <div className="text-xs uppercase tracking-[0.2em] text-[#c84b31] font-semibold">
-          Order #{order.id.slice(0, 6)}
+          Order #{order.id.slice(-5)}
         </div>
         <h1 className="font-display text-3xl sm:text-4xl font-semibold mt-2">
           {STATUS_META[order.status]?.label || order.status}

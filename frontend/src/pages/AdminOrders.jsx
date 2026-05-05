@@ -96,6 +96,17 @@ export default function AdminOrders() {
     }
   };
 
+  const markPaid = async (order) => {
+    try {
+      const orderId = String(order._id || order.id);
+      await api.post(`/admin/orders/${orderId}/pay`);
+      toast.success("Marked as paid");
+      load();
+    } catch (e) {
+      toast.error(formatError(e));
+    }
+  };
+
   return (
     <div className="p-8" data-testid="admin-orders">
       <div className="flex items-end justify-between mb-6">
@@ -148,7 +159,7 @@ export default function AdminOrders() {
                   <div className="flex items-start justify-between">
                     <div>
                       <div className="text-xs uppercase tracking-wider text-[#5c5656]">
-                        Table {tableNum} · #{orderId.slice(0, 6)}
+                        {o.queueNumber && <span className="font-bold text-[#c84b31] mr-1">Q{o.queueNumber} ·</span>} Table {tableNum} · #{orderId.slice(-5)}
                       </div>
                       <div className="font-display text-lg font-semibold mt-1">
                         ₹{total.toFixed(2)}
@@ -157,6 +168,12 @@ export default function AdminOrders() {
                             · {o.customer_name}
                           </span>
                         )}
+                      </div>
+                      <div className="text-xs mt-1">
+                        <span className={o.paymentStatus === 'paid' ? 'text-green-600 font-bold' : 'text-red-500 font-medium'}>
+                          {o.paymentStatus === 'paid' ? 'PAID' : 'UNPAID'}
+                        </span>
+                        {o.paymentMode && <span className="text-[#5c5656] ml-2 uppercase">({o.paymentMode})</span>}
                       </div>
                     </div>
                     <StatusPill status={o.status} />
@@ -174,7 +191,7 @@ export default function AdminOrders() {
                       );
                     })}
                   </div>
-                  <div className="flex gap-2 mt-4 pt-4 border-t border-[#eae6df]">
+                  <div className="flex gap-2 mt-4 pt-4 border-t border-[#eae6df] flex-wrap">
                     <button
                       onClick={() => navigate(`/admin/bill/${orderId}`)}
                       className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 flex items-center gap-1"
@@ -183,6 +200,14 @@ export default function AdminOrders() {
                       <Printer size={14} />
                       Print
                     </button>
+                    {o.paymentStatus !== 'paid' && (
+                      <button
+                        onClick={() => markPaid(o)}
+                        className="px-3 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700 flex items-center gap-1"
+                      >
+                        Paid
+                      </button>
+                    )}
                     {NEXT[o.status] && (
                       <button
                         data-testid={`advance-${orderId}`}

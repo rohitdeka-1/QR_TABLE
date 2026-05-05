@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, formatError } from "@/lib/api";
 import { toast } from "sonner";
-import { Plus, Edit, Trash2, X, Upload, Image } from "lucide-react";
+import { Plus, Edit, Trash2, X, Upload, Image, Camera } from "lucide-react";
 
 const emptyItem = {
   name: "",
@@ -20,6 +20,7 @@ const emptyCategory = {
 export default function AdminMenu() {
   const [items, setItems] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [restaurant, setRestaurant] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // null | 'new' | item
   const [editingCategory, setEditingCategory] = useState(null); // null | 'new' | category
@@ -28,15 +29,18 @@ export default function AdminMenu() {
   const [uploading, setUploading] = useState(false);
   const [imagePreview, setImagePreview] = useState(null);
   const [imageFile, setImageFile] = useState(null);
+  const [uploadingCover, setUploadingCover] = useState(false);
 
   const load = async () => {
     try {
-      const [itemsRes, categoriesRes] = await Promise.all([
+      const [itemsRes, categoriesRes, restRes] = await Promise.all([
         api.get("/admin/menu"),
         api.get("/admin/categories"),
+        api.get("/admin/restaurant"),
       ]);
       setItems(itemsRes.data);
       setCategories(categoriesRes.data);
+      setRestaurant(restRes.data);
     } catch (e) {
       toast.error(formatError(e));
     } finally {
@@ -47,6 +51,38 @@ export default function AdminMenu() {
   useEffect(() => {
     load();
   }, []);
+
+  const handleCoverUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please select an image file');
+      return;
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('File size must be less than 2 MB');
+      return;
+    }
+
+    try {
+      setUploadingCover(true);
+      const formData = new FormData();
+      formData.append('image', file);
+      
+      const res = await api.post('/admin/restaurant/cover', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      
+      setRestaurant(prev => ({ ...prev, coverImage: res.data.coverImage }));
+      toast.success('Cover image updated!');
+    } catch (err) {
+      toast.error(formatError(err));
+    } finally {
+      setUploadingCover(false);
+    }
+  };
 
   // Category management
   const openNewCategory = () => {
@@ -193,6 +229,41 @@ export default function AdminMenu() {
 
   return (
     <div className="p-8" data-testid="admin-menu">
+      {/* COVER IMAGE SECTION */}
+      <div className="mb-10">
+        <div className="flex items-end justify-between mb-6">
+          <div>
+            <h2 className="font-display text-2xl font-semibold">Restaurant Cover</h2>
+            <p className="text-sm text-[#5c5656] mt-1">This image appears at the top of your digital menu.</p>
+          </div>
+          <label className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#2a2626] text-white text-sm hover:bg-[#c84b31] cursor-pointer">
+            <Camera size={16} /> {uploadingCover ? "Uploading..." : "Change cover"}
+            <input 
+              type="file" 
+              accept="image/*" 
+              className="hidden" 
+              disabled={uploadingCover}
+              onChange={handleCoverUpload}
+            />
+          </label>
+        </div>
+        
+        {loading ? (
+          <div className="text-sm text-[#5c5656]">Loading cover...</div>
+        ) : restaurant?.coverImage ? (
+          <div className="relative w-full h-48 md:h-64 rounded-xl overflow-hidden shadow-sm border border-[#eae6df]">
+            <img src={restaurant.coverImage} alt="Cover" className="w-full h-full object-cover" />
+          </div>
+        ) : (
+          <div className="w-full h-48 md:h-64 bg-[#f4f3ef] rounded-xl flex items-center justify-center border-2 border-dashed border-[#eae6df]">
+            <div className="text-center text-[#5c5656]">
+              <Image size={32} className="mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No cover image uploaded yet</p>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* CATEGORIES SECTION */}
       <div className="mb-10">
         <div className="flex items-end justify-between mb-6">

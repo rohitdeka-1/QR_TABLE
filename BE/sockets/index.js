@@ -1,6 +1,7 @@
 import { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import Order from '../models/Order.js';
 import config from '../config/index.js';
 
 let io;
@@ -17,16 +18,27 @@ function init(server, options = {}) {
         .find((part) => part.startsWith('qr_restaurant_token='))
         ?.split('=')[1];
       const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.replace('Bearer ', '') || cookieToken;
-      if (!token) return next(new Error('Unauthorized'));
+      if (!token) {
+        socket.data.user = null;
+        return next();
+      }
 
-      const payload = jwt.verify(token, config.jwtSecret);
-      const user = await User.findById(payload.id).select('roles restaurantId');
-      if (!user) return next(new Error('Unauthorized'));
-      const roles = (user.roles && user.roles.length) ? user.roles : (payload.roles || (payload.role ? [payload.role] : []));
-      socket.data.user = { id: String(user._id), roles, restaurantId: String(user.restaurantId || payload.restaurantId || '') };
+      try {
+        const payload = jwt.verify(token, config.jwtSecret);
+        const user = await User.findById(payload.id).select('roles restaurantId');
+        if (user) {
+          const roles = (user.roles && user.roles.length) ? user.roles : (payload.roles || (payload.role ? [payload.role] : []));
+          socket.data.user = { id: String(user._id), roles, restaurantId: String(user.restaurantId || payload.restaurantId || '') };
+        } else {
+          socket.data.user = null;
+        }
+      } catch (err) {
+        socket.data.user = null;
+      }
       next();
     } catch (error) {
-      next(new Error('Unauthorized'));
+      socket.data.user = null;
+      next();
     }
   });
 
@@ -42,17 +54,31 @@ function init(server, options = {}) {
       }
     }
 
-    socket.on('join', (room) => {
+    socket.on('join', async (room, token) => {
       // allow joining only rooms in same restaurant or specific order/table where restaurantId matches
       if (!room) return;
       if (room.startsWith('restaurant:')) {
-        // only allow if same restaurant
+        // only allow if authenticated for that restaurant
+        if (!socket.data.user) return;
         const [, rId] = room.split(':');
         if (String(rId) === String(socket.data.user?.restaurantId)) socket.join(room);
         return;
       }
-      // allow joining order:<id> or table:<id>
-      if (room.startsWith('order:') || room.startsWith('table:')) {
+      // For order rooms: require the table token to prevent IDOR traversal
+      if (room.startsWith('order:')) {
+        const orderId = room.split(':')[1];
+        try {
+          const order = await Order.findById(orderId).populate('tableId').select('tableId');
+          if (!order) return;
+          // Admins/staff can join freely; anonymous customers must prove ownership via token
+          const isStaff = socket.data.user?.roles?.some(r => ['admin', 'kitchen', 'staff'].includes(r));
+          if (!isStaff && (!token || order.tableId?.qrToken !== token)) return;
+          socket.join(room);
+        } catch (_) {}
+        return;
+      }
+      // table:<id> rooms: allow freely (no sensitive data broadcast there)
+      if (room.startsWith('table:')) {
         socket.join(room);
       }
     });

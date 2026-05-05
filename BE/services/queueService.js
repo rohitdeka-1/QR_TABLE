@@ -3,7 +3,7 @@ import config from '../config/index.js';
 
 async function nextQueueNumber(key = 'order_queue') {
   const today = new Date();
-  const resetKey = `${key}:${today.toISOString().slice(0,10)}`;
+  const resetKey = `${key}:${today.toISOString().slice(0, 10)}`;
 
   const counter = await Counter.findOneAndUpdate(
     { key: resetKey },
@@ -11,7 +11,8 @@ async function nextQueueNumber(key = 'order_queue') {
     { upsert: true, new: true }
   );
 
-  return counter.seq;
+  // Loop back to 1 after 100
+  return ((counter.seq - 1) % 100) + 1;
 }
 
 export { nextQueueNumber };

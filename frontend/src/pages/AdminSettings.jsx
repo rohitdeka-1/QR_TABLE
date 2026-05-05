@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { api, formatError } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
-import { Settings, Save, MapPin, Phone } from "lucide-react";
+import { Settings, Save, MapPin, Phone, KeyRound, Eye, EyeOff, Mail } from "lucide-react";
 
 export default function AdminSettings() {
+  const { user } = useAuth();
   const [restaurant, setRestaurant] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -15,6 +17,13 @@ export default function AdminSettings() {
     latitude: "",
     longitude: "",
   });
+
+  // Change password state
+  const [pwStep, setPwStep] = useState(0); // 0=idle 1=otp-sent 2=otp-verified
+  const [pwLoading, setPwLoading] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [showPw, setShowPw] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -75,6 +84,51 @@ export default function AdminSettings() {
       });
     } else {
       toast.error("Geolocation not supported");
+    }
+  };
+
+  // ── Change password helpers ───────────────────────────────────────────────
+  const handleSendOtp = async () => {
+    if (!user?.email) return;
+    setPwLoading(true);
+    try {
+      await api.post("/auth/send-otp", { email: user.email, purpose: "change-password" });
+      toast.success(`OTP sent to ${user.email}`);
+      setPwStep(1);
+    } catch (e) {
+      toast.error(formatError(e));
+    } finally {
+      setPwLoading(false);
+    }
+  };
+
+  const [otpValue, setOtpValue] = useState("");
+  const handleVerifyOtp = async () => {
+    if (!otpValue) { toast.error("Enter the OTP"); return; }
+    setPwLoading(true);
+    try {
+      await api.post("/auth/verify-otp", { email: user.email, otp: otpValue, purpose: "change-password" });
+      toast.success("Email verified! Set your new password.");
+      setPwStep(2);
+    } catch (e) {
+      toast.error(formatError(e));
+    } finally {
+      setPwLoading(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (newPassword !== confirmPw) { toast.error("Passwords do not match"); return; }
+    if (newPassword.length < 8)   { toast.error("Password must be at least 8 characters"); return; }
+    setPwLoading(true);
+    try {
+      await api.post("/auth/change-password", { password: newPassword, confirmPassword: confirmPw });
+      toast.success("Password changed successfully!");
+      setPwStep(0); setNewPassword(""); setConfirmPw(""); setOtpValue("");
+    } catch (e) {
+      toast.error(formatError(e));
+    } finally {
+      setPwLoading(false);
     }
   };
 
@@ -215,6 +269,99 @@ export default function AdminSettings() {
             {saving ? "Saving..." : "Save Settings"}
           </button>
         </div>
+      </div>
+
+      {/* ── Change Password Section ── */}
+      <div className="bg-white rounded-2xl border border-[#eae6df] p-6 max-w-2xl mt-8">
+        <div className="flex items-center gap-2 mb-6">
+          <KeyRound size={18} className="text-[#c84b31]" />
+          <h2 className="font-display text-xl font-semibold">Change Password</h2>
+        </div>
+
+        {pwStep === 0 && (
+          <div>
+            <p className="text-sm text-[#5c5656] mb-4">
+              We'll send a one-time verification code to <strong>{user?.email}</strong> before letting you set a new password.
+            </p>
+            <button
+              onClick={handleSendOtp}
+              disabled={pwLoading}
+              className="flex items-center gap-2 px-5 py-2.5 bg-[#2a2626] text-white rounded-lg text-sm font-medium hover:bg-[#c84b31] disabled:opacity-50"
+            >
+              <Mail size={15} /> {pwLoading ? "Sending..." : "Send verification code"}
+            </button>
+          </div>
+        )}
+
+        {pwStep === 1 && (
+          <div className="space-y-4">
+            <p className="text-sm text-[#5c5656]">Enter the 6-digit code sent to <strong>{user?.email}</strong>.</p>
+            <div className="flex gap-3">
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                value={otpValue}
+                onChange={(e) => setOtpValue(e.target.value.replace(/\D/g, ""))}
+                placeholder="123456"
+                className="w-40 px-4 py-2 border border-[#eae6df] rounded-lg text-center text-xl font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-[#c84b31]"
+              />
+              <button
+                onClick={handleVerifyOtp}
+                disabled={pwLoading || otpValue.length < 6}
+                className="px-5 py-2 bg-[#c84b31] text-white rounded-lg text-sm font-medium hover:bg-[#b53a1c] disabled:opacity-50"
+              >
+                {pwLoading ? "Verifying..." : "Verify"}
+              </button>
+            </div>
+            <button onClick={() => { setPwStep(0); setOtpValue(""); }} className="text-xs text-[#5c5656] hover:text-[#c84b31]">
+              Resend / cancel
+            </button>
+          </div>
+        )}
+
+        {pwStep === 2 && (
+          <div className="space-y-4">
+            <p className="text-sm text-[#5c5656]">Email verified ✓ — set your new password below.</p>
+            <div className="relative">
+              <label className="block text-xs font-medium text-[#5c5656] mb-1">New password</label>
+              <div className="relative">
+                <input
+                  type={showPw ? "text" : "password"}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Min. 8 characters"
+                  className="w-full px-4 py-2 border border-[#eae6df] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c84b31] pr-10"
+                />
+                <button type="button" onClick={() => setShowPw(v => !v)} className="absolute right-3 top-2.5 text-[#5c5656]">
+                  {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-[#5c5656] mb-1">Confirm new password</label>
+              <input
+                type={showPw ? "text" : "password"}
+                value={confirmPw}
+                onChange={(e) => setConfirmPw(e.target.value)}
+                placeholder="Re-enter password"
+                className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c84b31] ${
+                  confirmPw && confirmPw !== newPassword ? "border-red-400" : "border-[#eae6df]"
+                }`}
+              />
+              {confirmPw && confirmPw !== newPassword && (
+                <p className="text-xs text-red-500 mt-1">Passwords do not match</p>
+              )}
+            </div>
+            <button
+              onClick={handleChangePassword}
+              disabled={pwLoading || newPassword.length < 8 || newPassword !== confirmPw}
+              className="flex items-center gap-2 px-6 py-2.5 bg-[#c84b31] text-white rounded-lg text-sm font-medium hover:bg-[#b53a1c] disabled:opacity-50"
+            >
+              <KeyRound size={15} /> {pwLoading ? "Saving..." : "Change password"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

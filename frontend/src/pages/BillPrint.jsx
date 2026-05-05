@@ -72,8 +72,8 @@ export default function BillPrint() {
         </button>
       </div>
 
-      {/* Bill Container - A4 size */}
-      <div className="mx-auto max-w-md bg-white p-8" style={{ width: '80mm', fontFamily: 'monospace' }}>
+      {/* Bill Container - Thermal format */}
+      <div id="receipt-content" className="mx-auto bg-white p-4 sm:p-8" style={{ width: '80mm', fontFamily: 'monospace', color: '#000' }}>
         {/* Header */}
         <div className="text-center mb-4 border-b-2 border-dashed border-gray-800 pb-4">
           <h1 className="text-xl font-bold">{restaurant.name}</h1>
@@ -185,20 +185,24 @@ export default function BillPrint() {
       {/* Print styles */}
       <style>{`
         @media print {
-          body {
-            margin: 0;
-            padding: 0;
-          }
-          .print\\:hidden {
-            display: none;
-          }
-          * {
-            box-shadow: none;
-            text-shadow: none;
-          }
-          page {
+          @page {
             size: 80mm auto;
             margin: 0;
+          }
+          body * {
+            visibility: hidden;
+          }
+          #receipt-content, #receipt-content * {
+            visibility: visible;
+          }
+          #receipt-content {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 80mm !important;
+            padding: 5mm !important;
+            margin: 0 !important;
+            box-shadow: none !important;
           }
         }
       `}</style>

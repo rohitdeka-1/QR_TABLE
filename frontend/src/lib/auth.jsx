@@ -26,11 +26,12 @@ export function AuthProvider({ children }) {
     return res.data.user;
   };
 
-  const registerRestaurant = async ({ restaurantName, ownerName, ownerEmail }) => {
+  const registerRestaurant = async ({ restaurantName, ownerName, ownerEmail, password }) => {
     const res = await api.post("/auth/register", {
       restaurantName,
       ownerName,
       ownerEmail,
+      password,
     });
     return res.data;
   };

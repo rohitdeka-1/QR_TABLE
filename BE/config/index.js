@@ -20,7 +20,7 @@ const config = {
   jwtSecret: requireSecret('JWT_SECRET', process.env.JWT_SECRET),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
   rateLimitWindowMinutes: Number(process.env.RATE_LIMIT_WINDOW_MINUTES || 1),
-  rateLimitMax: Number(process.env.RATE_LIMIT_MAX || 30),
+  rateLimitMax: Number(process.env.RATE_LIMIT_MAX || 200),
   queueResetHour: Number(process.env.QUEUE_RESET_HOUR || 0),
   clientOrigins: (process.env.CLIENT_ORIGIN || 'http://localhost:3000,http://localhost:3000')
     .split(',')
