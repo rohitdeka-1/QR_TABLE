@@ -146,8 +146,7 @@ export default function Landing() {
       </main>
 
       <footer className="relative z-10 border-t border-[#eae6df]/60 py-6 text-center text-xs text-[#5c5656]">
-        Demo admin: <span className="font-mono">admin@qrtable.com</span> /{" "}
-        <span className="font-mono">admin123</span>
+        &copy; {new Date().getFullYear()} QR Restaurant System
       </footer>
     </div>
   );

@@ -81,7 +81,7 @@ export default function RestaurantRegister() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f9f8f6] relative overflow-hidden px-4 py-8">
+    <div className="min-h-screen bg-[#f9f8f6] relative overflow-hidden px-4 py-12 flex flex-col items-center justify-center">
       <div
         className="absolute inset-0 opacity-30 pointer-events-none"
         style={{
